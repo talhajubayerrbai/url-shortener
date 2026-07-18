@@ -1,0 +1,105 @@
+version: 1
+name: url-shortener
+vcs: github
+stages:
+  - id: lint
+    kind: lint
+    needs: []
+    steps:
+      - name: Install & run flake8
+        run: |
+          pip install flake8
+          flake8 app/ url_shortener/ --max-line-length=120 --exclude=migrations
+
+  - id: test
+    kind: test
+    needs: [lint]
+    steps:
+      - name: Run Django tests
+        run: |
+          pip install -r requirements.txt
+          python manage.py test app --verbosity=2
+        env:
+          DATABASE_URL: sqlite:///test.db
+          SECRET_KEY: test-secret-key-not-real
+          DEBUG: "True"
+          ALLOWED_HOSTS: "*"
+
+  - id: provision
+    kind: provision
+    needs: [test]
+    steps:
+      - name: Terraform init
+        run: |
+          cd infra
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
+            -backend-config="region=us-east-1"
+      - name: Terraform apply
+        run: |
+          cd infra
+          terraform apply -auto-approve \
+            -var="project_name=${{ secrets.PROJECT_NAME }}" \
+            -var="db_password=${{ secrets.DB_PASSWORD }}" \
+            -var="secret_key=${{ secrets.DJANGO_SECRET_KEY }}" \
+            -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
+            -var="tf_state_bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+  - id: configure
+    kind: configure
+    needs: [provision]
+    steps:
+      - name: Clone & start app
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > key.pem && chmod 600 key.pem
+          EC2_IP=$(cd infra && terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
+            -backend-config="region=us-east-1" -reconfigure > /dev/null 2>&1 && \
+            terraform output -raw ec2_public_ip)
+          ssh -o StrictHostKeyChecking=no -i key.pem ${{ secrets.SSH_USER }}@$EC2_IP bash <<'ENDSSH'
+            set -euxo pipefail
+            APP_DIR=/opt/url-shortener
+            REPO_URL=https://github.com/${{ secrets.GH_REPO }}.git
+
+            # Clone or pull
+            if [ -d "$APP_DIR/.git" ]; then
+              cd "$APP_DIR" && git pull origin main
+            else
+              git clone "$REPO_URL" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+
+            # Create/update virtualenv
+            python3 -m venv venv
+            venv/bin/pip install --upgrade pip
+            venv/bin/pip install -r requirements.txt
+
+            # Migrate & collect static
+            venv/bin/python manage.py migrate --noinput
+            venv/bin/python manage.py collectstatic --noinput
+
+            # (Re)start service
+            sudo systemctl restart url-shortener
+          ENDSSH
+
+  - id: verify
+    kind: verify
+    needs: [configure]
+    steps:
+      - name: Health check
+        run: |
+          EC2_IP=$(cd infra && terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
+            -backend-config="region=us-east-1" -reconfigure > /dev/null 2>&1 && \
+            terraform output -raw ec2_public_ip)
+          echo "Checking http://$EC2_IP/health/"
+          sleep 15
+          curl --fail --retry 8 --retry-delay 10 --retry-all-errors \
+            http://$EC2_IP/health/
+
+rollback:
+  strategy: manual

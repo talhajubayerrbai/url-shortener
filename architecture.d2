@@ -1,0 +1,10 @@
+# udap:meta cloud=aws region=us-east-1 target=ec2
+
+user: User { shape: rectangle; udap-type: generic.user }
+vpc: Default VPC {
+  ec2: App Server (EC2) { shape: rectangle; udap-type: aws.ec2 }
+  db: PostgreSQL { shape: rectangle; udap-type: generic.db }
+}
+
+user -> vpc.ec2: HTTPS :443 / HTTP :80
+vpc.ec2 -> vpc.db: SQL :5432
