@@ -5,7 +5,6 @@ from django.http import (
     HttpRequest,
     HttpResponse,
     HttpResponseBadRequest,
-    HttpResponseNotFound,
     JsonResponse,
 )
 from django.shortcuts import get_object_or_404, redirect
@@ -50,7 +49,7 @@ class ShortenView(View):
             return JsonResponse({"error": "url must start with http:// or https://"}, status=400)
 
         if custom_code and len(custom_code) > 20:
-            return JsonResponse({"error": "custom code must be ≤ 20 characters"}, status=400)
+            return JsonResponse({"error": "custom code must be \u2264 20 characters"}, status=400)
 
         try:
             short = ShortURL.create_unique(original_url, custom_code)
