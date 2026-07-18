@@ -9,8 +9,6 @@ terraform {
   backend "s3" {
     # bucket/key/region are injected at runtime via -backend-config flags
     # (platform patches these; do NOT hardcode values here)
-    key    = "url-shortener/terraform.tfstate"
-    region = "us-east-1"
   }
 }
 

@@ -32,7 +32,7 @@ stages:
       - name: Terraform init
         run: |
           cd infra
-          terraform init \
+          terraform init -reconfigure \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
             -backend-config="region=us-east-1"
@@ -53,7 +53,7 @@ stages:
       - name: Clone & start app
         run: |
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > key.pem && chmod 600 key.pem
-          EC2_IP=$(cd infra && terraform init \
+          EC2_IP=$(cd infra && terraform init -reconfigure \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
             -backend-config="region=us-east-1" -reconfigure > /dev/null 2>&1 && \
@@ -91,7 +91,7 @@ stages:
     steps:
       - name: Health check
         run: |
-          EC2_IP=$(cd infra && terraform init \
+          EC2_IP=$(cd infra && terraform init -reconfigure \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -backend-config="key=${{ secrets.PROJECT_NAME }}/terraform.tfstate" \
             -backend-config="region=us-east-1" -reconfigure > /dev/null 2>&1 && \
