@@ -1,0 +1,142 @@
+{
+  "edges": [],
+  "groups": [
+    {
+      "id": "env_01a08047e14493a88767f0508526830c",
+      "kind": "environment",
+      "name": "rke2-demo",
+      "purpose": "dev",
+      "ref": {
+        "id": "env_01a08047e14493a88767f0508526830c",
+        "kind": "environment"
+      }
+    },
+    {
+      "id": "env_01a076bd51f89be2939a68544be4071e",
+      "kind": "environment",
+      "name": "udap-dev",
+      "purpose": "dev",
+      "ref": {
+        "id": "env_01a076bd51f89be2939a68544be4071e",
+        "kind": "environment"
+      }
+    },
+    {
+      "id": "env_01a07b69deb411117b5a30048eb78c53",
+      "kind": "environment",
+      "name": "todo-dev",
+      "purpose": "dev",
+      "ref": {
+        "id": "env_01a07b69deb411117b5a30048eb78c53",
+        "kind": "environment"
+      }
+    },
+    {
+      "id": "env_01a099a28de8f7489daf17d06235b6a7",
+      "kind": "environment",
+      "name": "url-shortener-dev",
+      "purpose": "dev",
+      "ref": {
+        "id": "env_01a099a28de8f7489daf17d06235b6a7",
+        "kind": "environment"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "group": "env_01a08047e14493a88767f0508526830c",
+      "id": "tgt_01a0804803fc4ff461739ed74177578f",
+      "name": "rke2-cluster-demo",
+      "props": {},
+      "ref": {
+        "id": "tgt_01a0804803fc4ff461739ed74177578f",
+        "kind": "target"
+      },
+      "runtime_known": true,
+      "service_id": "svc_01a08041bef819ef29665d1097e59b41",
+      "type": "service.k8s"
+    },
+    {
+      "group": "env_01a076bd51f89be2939a68544be4071e",
+      "id": "tgt_01a07f936f857e46d115cb65587ac5aa",
+      "name": "boot-hello",
+      "props": {
+        "memory_mb": 512,
+        "runtime_version": "java21",
+        "timeout_s": 30
+      },
+      "ref": {
+        "id": "tgt_01a07f936f857e46d115cb65587ac5aa",
+        "kind": "target"
+      },
+      "runtime_known": true,
+      "service_id": "svc_01a07f8edf8cc3f3f60efe2c42a2830b",
+      "type": "service.serverless"
+    },
+    {
+      "group": "env_01a076bd51f89be2939a68544be4071e",
+      "id": "tgt_01a07cb881bdebb76e46d46a1e3ef7d4",
+      "name": "python-calculator-app",
+      "props": {
+        "chart_path": "charts/calculator",
+        "cpu": "500m",
+        "image_repository": "calculator-app",
+        "memory": "256Mi",
+        "namespace": "default",
+        "replicas": 1,
+        "workload_kind": "deployment"
+      },
+      "ref": {
+        "id": "tgt_01a07cb881bdebb76e46d46a1e3ef7d4",
+        "kind": "target"
+      },
+      "runtime_known": true,
+      "service_id": "svc_01a07cb80bb6fc4423bd49e5efc427d1",
+      "type": "service.k8s"
+    },
+    {
+      "group": "env_01a07b69deb411117b5a30048eb78c53",
+      "id": "tgt_01a07c246f78d34559dbb2c844f5d62c",
+      "name": "todo-app-fastapi",
+      "props": {
+        "cpu": "256",
+        "desired_count": 1,
+        "memory": "512",
+        "task_family": "todo-app-fastapi"
+      },
+      "ref": {
+        "id": "tgt_01a07c246f78d34559dbb2c844f5d62c",
+        "kind": "target"
+      },
+      "runtime_known": true,
+      "service_id": "svc_01a07bf3fb4df867822dc41655ca679f",
+      "type": "service.ecs"
+    },
+    {
+      "group": "env_01a099a28de8f7489daf17d06235b6a7",
+      "id": "svc_01a099a30f200992251857ca44828a38",
+      "name": "url-shortener",
+      "props": {
+        "cpu": "256",
+        "desired_count": 1,
+        "image_repository": "url-shortener",
+        "memory": "512",
+        "provider": "aws",
+        "region": "us-east-1",
+        "task_family": "url-shortener"
+      },
+      "ref": {
+        "id": "svc_01a099a30f200992251857ca44828a38",
+        "kind": "service"
+      },
+      "runtime_known": true,
+      "service_id": "svc_01a099a30f200992251857ca44828a38",
+      "type": "service.ecs"
+    }
+  ],
+  "scope": {
+    "id": null,
+    "kind": "estate"
+  },
+  "version": 1
+}

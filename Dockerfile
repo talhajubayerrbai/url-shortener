@@ -1,8 +1,14 @@
 FROM python:3.12-slim
+
 WORKDIR /app
+
+# Install dependencies first for layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-RUN python manage.py collectstatic --noinput
-EXPOSE $PORT
-CMD ["gunicorn", "url_shortener.wsgi", "--bind", "0.0.0.0:$PORT", "--workers", "2"]
+
+# Copy application
+COPY main.py .
+
+EXPOSE 8080
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

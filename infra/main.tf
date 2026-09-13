@@ -7,8 +7,7 @@ terraform {
     }
   }
   backend "s3" {
-    # bucket/key/region are injected at runtime via -backend-config flags
-    # (platform patches these; do NOT hardcode values here)
+    # bucket / key / region injected at runtime via -backend-config flags
   }
 }
 
@@ -31,48 +30,51 @@ data "aws_subnets" "default" {
   }
 }
 
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+data "aws_caller_identity" "current" {}
+
+# ---------------------------------------------------------------------------
+# ECR repository
+# ---------------------------------------------------------------------------
+
+resource "aws_ecr_repository" "app" {
+  name                 = var.service_name
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
   }
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
+
+  tags = { Project = var.service_name }
+}
+
+resource "aws_ecr_lifecycle_policy" "app" {
+  repository = aws_ecr_repository.app.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 10 images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 10
+      }
+      action = { type = "expire" }
+    }]
+  })
 }
 
 # ---------------------------------------------------------------------------
-# Security Group
+# Security groups
 # ---------------------------------------------------------------------------
 
-resource "aws_security_group" "app" {
-  name        = "${var.project_name}-sg"
-  description = "URL Shortener security group"
+resource "aws_security_group" "alb" {
+  name        = "${var.service_name}-alb-sg"
+  description = "Allow HTTP inbound to ALB"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    description = "HTTP"
     from_port   = 80
     to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -84,138 +86,219 @@ resource "aws_security_group" "app" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = {
-    Name    = "${var.project_name}-sg"
-    Project = var.project_name
+  tags = { Name = "${var.service_name}-alb-sg", Project = var.service_name }
+}
+
+resource "aws_security_group" "app" {
+  name        = "${var.service_name}-app-sg"
+  description = "Allow inbound from ALB only"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
   }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Name = "${var.service_name}-app-sg", Project = var.service_name }
 }
 
 # ---------------------------------------------------------------------------
-# EC2 Key Pair (injected by platform)
+# IAM — ECS task execution role
 # ---------------------------------------------------------------------------
 
-resource "aws_key_pair" "deploy" {
-  key_name   = "${var.project_name}-key"
-  public_key = var.ssh_public_key
-}
-
-# ---------------------------------------------------------------------------
-# EC2 Instance
-# ---------------------------------------------------------------------------
-
-locals {
-  user_data = <<-BOOTSTRAP
-#!/bin/bash
-set -euxo pipefail
-
-PROJECT="${var.project_name}"
-APP_DIR="/opt/url-shortener"
-DB_NAME="urlshortener"
-DB_USER="urlshortener"
-DB_CRED="${var.db_password}"
-
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y python3 python3-pip python3-venv python3-dev \
-  postgresql postgresql-contrib nginx git curl
-
-systemctl enable postgresql
-systemctl start postgresql
-
-sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_CRED';" 2>/dev/null || true
-sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" 2>/dev/null || true
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;" 2>/dev/null || true
-
-mkdir -p "$APP_DIR"
-chown ubuntu:ubuntu "$APP_DIR"
-
-cat > "$APP_DIR/.env" <<ENVEOF
-DATABASE_URL=postgresql://$DB_USER:$DB_CRED@localhost:5432/$DB_NAME
-SECRET_KEY=${var.secret_key}
-DEBUG=False
-ALLOWED_HOSTS=${var.allowed_hosts}
-ENVEOF
-
-cat > /etc/nginx/sites-available/url-shortener <<'NGINX'
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    client_max_body_size 10M;
-    location /static/ {
-        alias /opt/url-shortener/staticfiles/;
+data "aws_iam_policy_document" "ecs_assume" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
     }
-    location / {
-        proxy_pass         http://127.0.0.1:8000;
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto $scheme;
-        proxy_read_timeout 60s;
+  }
+}
+
+resource "aws_iam_role" "execution" {
+  name               = "${var.service_name}-execution-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+  tags               = { Project = var.service_name }
+}
+
+resource "aws_iam_role_policy_attachment" "execution" {
+  role       = aws_iam_role.execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role" "task" {
+  name               = "${var.service_name}-task-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+  tags               = { Project = var.service_name }
+}
+
+# ---------------------------------------------------------------------------
+# CloudWatch log group
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/ecs/${var.service_name}"
+  retention_in_days = 7
+  tags              = { Project = var.service_name }
+}
+
+# ---------------------------------------------------------------------------
+# ECS cluster
+# ---------------------------------------------------------------------------
+
+resource "aws_ecs_cluster" "main" {
+  name = var.service_name
+  tags = { Project = var.service_name }
+}
+
+resource "aws_ecs_cluster_capacity_providers" "main" {
+  cluster_name       = aws_ecs_cluster.main.name
+  capacity_providers = ["FARGATE"]
+
+  default_capacity_provider_strategy {
+    capacity_provider = "FARGATE"
+    weight            = 1
+  }
+}
+
+# ---------------------------------------------------------------------------
+# ECS task definition
+# ---------------------------------------------------------------------------
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = var.service_name
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  container_definitions = jsonencode([{
+    name      = var.service_name
+    image     = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+    essential = true
+
+    portMappings = [{
+      containerPort = 8080
+      hostPort      = 8080
+      protocol      = "tcp"
+    }]
+
+    environment = [{
+      name  = "BASE_URL"
+      value = "http://${aws_lb.main.dns_name}"
+    }]
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.app.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "ecs"
+      }
     }
-}
-NGINX
 
-ln -sf /etc/nginx/sites-available/url-shortener /etc/nginx/sites-enabled/url-shortener
-rm -f /etc/nginx/sites-enabled/default
-nginx -t
-systemctl enable nginx
-systemctl restart nginx
+    healthCheck = {
+      command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 15
+    }
+  }])
 
-cat > /etc/systemd/system/url-shortener.service <<'UNIT'
-[Unit]
-Description=URL Shortener Gunicorn
-After=network.target postgresql.service
-[Service]
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/opt/url-shortener
-EnvironmentFile=/opt/url-shortener/.env
-ExecStart=/opt/url-shortener/venv/bin/gunicorn \
-    --workers 3 \
-    --bind 127.0.0.1:8000 \
-    --access-logfile - \
-    --error-logfile - \
-    url_shortener.wsgi:application
-Restart=always
-RestartSec=5
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-systemctl daemon-reload
-systemctl enable url-shortener
-BOOTSTRAP
+  tags = { Project = var.service_name }
 }
 
-resource "aws_instance" "app" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = "t3.micro"
-  subnet_id              = data.aws_subnets.default.ids[0]
-  vpc_security_group_ids = [aws_security_group.app.id]
-  key_name               = aws_key_pair.deploy.key_name
-  user_data              = local.user_data
+# ---------------------------------------------------------------------------
+# Application Load Balancer
+# ---------------------------------------------------------------------------
 
-  root_block_device {
-    volume_size = 20
-    volume_type = "gp3"
+resource "aws_lb" "main" {
+  name               = var.service_name
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = data.aws_subnets.default.ids
+
+  tags = { Project = var.service_name }
+}
+
+resource "aws_lb_target_group" "app" {
+  name        = var.service_name
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = data.aws_vpc.default.id
+  target_type = "ip"
+
+  health_check {
+    path                = "/health"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    matcher             = "200"
   }
 
-  tags = {
-    Name    = "${var.project_name}-app"
-    Project = var.project_name
+  tags = { Project = var.service_name }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
   }
 }
 
 # ---------------------------------------------------------------------------
-# Elastic IP
+# ECS service
 # ---------------------------------------------------------------------------
 
-resource "aws_eip" "app" {
-  instance = aws_instance.app.id
-  domain   = "vpc"
+resource "aws_ecs_service" "app" {
+  name                               = var.service_name
+  cluster                            = aws_ecs_cluster.main.id
+  task_definition                    = aws_ecs_task_definition.app.arn
+  desired_count                      = 1
+  launch_type                        = "FARGATE"
+  health_check_grace_period_seconds  = 60
 
-  tags = {
-    Name    = "${var.project_name}-eip"
-    Project = var.project_name
+  network_configuration {
+    subnets          = data.aws_subnets.default.ids
+    security_groups  = [aws_security_group.app.id]
+    assign_public_ip = true
   }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = var.service_name
+    container_port   = 8080
+  }
+
+  # Allow rolling deploys to replace the task definition
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.execution,
+    aws_lb_listener.http,
+  ]
+
+  tags = { Project = var.service_name }
 }
