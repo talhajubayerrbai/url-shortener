@@ -188,35 +188,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Update ECS task definition image
+      - name: Force new ECS deployment
         run: |
-          # Register a new task definition revision pointing at the new tag
-          TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition ${{ vars.SERVICE_NAME }} \
-            --query 'taskDefinition' --output json)
-
-          NEW_IMAGE="${{ needs.build.outputs.ecr_url }}:${{ needs.build.outputs.image_tag }}"
-
-          NEW_TD=$(echo "$TASK_DEF" | python3 - <<PYEOF
-          import json, sys
-          td = json.load(sys.stdin)
-          for cd in td["containerDefinitions"]:
-              cd["image"] = "${NEW_IMAGE}"
-          for k in ["taskDefinitionArn","revision","status","requiresAttributes",
-                    "compatibilities","registeredAt","registeredBy"]:
-              td.pop(k, None)
-          print(json.dumps(td))
-          PYEOF
-          )
-
-          NEW_ARN=$(aws ecs register-task-definition \
-            --cli-input-json "$NEW_TD" \
-            --query 'taskDefinition.taskDefinitionArn' --output text)
-
+          # Terraform already registered the correct task definition revision.
+          # Just force the service to pick it up.
           aws ecs update-service \
             --cluster ${{ vars.SERVICE_NAME }} \
             --service  ${{ vars.SERVICE_NAME }} \
-            --task-definition "$NEW_ARN" \
             --force-new-deployment
 
       - name: Wait for ECS service to stabilise
