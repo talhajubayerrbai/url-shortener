@@ -33,19 +33,13 @@ data "aws_subnets" "default" {
 data "aws_caller_identity" "current" {}
 
 # ---------------------------------------------------------------------------
-# ECR repository  (created imperatively by the build job; read here via data)
-# Wrapped in try() so terraform destroy tolerates a missing repository.
+# ECR repository URL — hardcoded so terraform destroy tolerates a missing
+# repository (the data source errors on refresh if the repo is already gone).
+# The task definition is destroyed anyway so the exact value does not matter.
 # ---------------------------------------------------------------------------
 
-data "aws_ecr_repository" "app" {
-  name = var.service_name
-}
-
 locals {
-  ecr_repo_url = try(
-    data.aws_ecr_repository.app.repository_url,
-    "000000000000.dkr.ecr.${var.aws_region}.amazonaws.com/${var.service_name}"
-  )
+  ecr_repo_url = "241533126054.dkr.ecr.${var.aws_region}.amazonaws.com/${var.service_name}"
 }
 
 # ---------------------------------------------------------------------------
