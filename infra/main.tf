@@ -34,10 +34,18 @@ data "aws_caller_identity" "current" {}
 
 # ---------------------------------------------------------------------------
 # ECR repository  (created imperatively by the build job; read here via data)
+# Wrapped in try() so terraform destroy tolerates a missing repository.
 # ---------------------------------------------------------------------------
 
 data "aws_ecr_repository" "app" {
   name = var.service_name
+}
+
+locals {
+  ecr_repo_url = try(
+    data.aws_ecr_repository.app.repository_url,
+    "000000000000.dkr.ecr.${var.aws_region}.amazonaws.com/${var.service_name}"
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -164,7 +172,7 @@ resource "aws_ecs_task_definition" "app" {
 
   container_definitions = jsonencode([{
     name      = var.service_name
-    image     = "${data.aws_ecr_repository.app.repository_url}:${var.image_tag}"
+    image     = "${local.ecr_repo_url}:${var.image_tag}"
     essential = true
 
     portMappings = [{
